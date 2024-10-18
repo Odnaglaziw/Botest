@@ -8,14 +8,22 @@ using Telegram.Bot.Types.ReplyMarkups;
 using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
 using System.Xml.Linq;
 using System.Text.RegularExpressions;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace Botest
 {
     public class Program
     {
         static readonly int AdminChatId = 1439555515;
+        static DateTime lastUpdate = DateTime.Now;
+        static readonly string urlBell = @"https://www.ects.ru/images/280/Image/zvonki.jpg";
         public static void Main(string[] args)
         {
+            AppDomain.CurrentDomain.ProcessExit += (s, e) =>
+            {
+                Log("Сохранение данных.");
+                SaveStates().GetAwaiter().GetResult();
+            };
             EnsureDb();
             AddUser(AdminChatId,"Admin","ygy","Pr-31","main");
             UserState.States[AdminChatId] = "main";
@@ -25,7 +33,17 @@ namespace Botest
             timer.Elapsed += Timer_Elapsed;
             timer.Start();
             timer.Disposed += Timer_Disposed;
+            System.Timers.Timer upd = new System.Timers.Timer();
+            upd.Interval = 3_600_000;
+            upd.Elapsed += Upd_Elapsed;
             Console.ReadLine();
+        }
+
+        private static void Upd_Elapsed(object? sender, ElapsedEventArgs e)
+        {
+            Log("Данные обновлены");
+            DownloadFiles();
+            lastUpdate = DateTime.Now;
         }
 
         private static void Timer_Disposed(object? sender, EventArgs e)
@@ -84,6 +102,7 @@ namespace Botest
                         var user = await GetUser(chatId);
                         user.Name = message.Text.Trim();
                         UserState.States[chatId] = "reg:LastName";
+                        user.State = UserState.States[chatId];
                         await UpdateUser(user);
                         await client.SendTextMessageAsync(chatId,$"Записал ваше имя как {message.Text}\nКакая у вас фамииля?");
                     }
@@ -93,6 +112,7 @@ namespace Botest
                         var user = await GetUser(chatId);
                         user.LastName = message.Text.Trim();
                         UserState.States[chatId] = "reg:Group";
+                        user.State = UserState.States[chatId];
                         await UpdateUser(user);
                         await client.SendTextMessageAsync(chatId, $"Записал вашу фамилию как {message.Text}\nВ какой вы группе?\n(В формате ХХ-00)");
                     }
@@ -113,6 +133,7 @@ namespace Botest
                         var user = await GetUser(chatId);
                         user.Group = message.Text.Trim();
                         UserState.States[chatId] = "main";
+                        user.State = UserState.States[chatId];
                         await UpdateUser(user);
                         await client.SendTextMessageAsync(chatId, $"Записал вашу группу как {message.Text}\nПрофиль заполнен, рад был познакомиться!");
                         List<InlineKeyboardButton> btns = [InlineKeyboardButton.WithCallbackData("Данные", $"GetInfo;{chatId}")];
@@ -150,9 +171,13 @@ namespace Botest
                     }break;
                 case "profile":
                     {
-
+                        await CallBackHandler(client, new CallbackQuery { Data = "Profile", Message = message });
                     }
                     break;
+                case "menu":
+                    {
+                        await CallBackHandler(client,new CallbackQuery { Data = "Menu", Message = message });
+                    }break;
                 default: { }break;
             }
         }
@@ -180,6 +205,53 @@ namespace Botest
                         await client.SendTextMessageAsync(AdminChatId,text);
                     }
                     break;
+                case "Menu":
+                    {
+                        string text = "Вот что я могу:";
+                        List<InlineKeyboardButton> btns = [
+                        InlineKeyboardButton.WithCallbackData("Изменения","Schedule"),
+                        InlineKeyboardButton.WithCallbackData("Звонки","Bells"),
+                        InlineKeyboardButton.WithCallbackData("Дней до..","DaysTo"),
+                        InlineKeyboardButton.WithCallbackData("Профиль","Profile"),
+                        ];
+                        InlineKeyboardMarkup ikm = new(btns);
+                        await client.SendTextMessageAsync(chatId,text,replyMarkup:ikm);
+                    }break;
+                case "Schedule":
+                    {
+
+                    }break;
+                case "Bells":
+                    {
+
+                    }
+                    break;
+                case "DaysTo":
+                    {
+
+                    }
+                    break;
+                case "Profile":
+                    {
+                        string text = "";
+                        var user = await GetUser(chatId);
+                        text = $"Имя пользователя: {user.Name}\n" +
+                            $"Фамилия пользователя: {user.LastName}\n" +
+                            $"Группа пользователя: {user.Group}\n" +
+                            $"id пользователя: {user.Id}";
+                        List<InlineKeyboardButton> btns = [
+                        InlineKeyboardButton.WithCallbackData("Изменить","Reg"),
+                        InlineKeyboardButton.WithCallbackData("Назад","Menu"),
+                        ];
+                        InlineKeyboardMarkup ikm = new(btns);
+                        await client.SendTextMessageAsync(chatId, text, replyMarkup: ikm);
+                    }
+                    break;
+                case "Reg":
+                    {
+                        UserState.States[chatId] = "reg:Name";
+                        await client.SendTextMessageAsync(chatId,"Введите новое имя:");
+                    }break;
 
                 default: { }break;
             }
@@ -255,6 +327,37 @@ namespace Botest
                 }
             }
             Log("Статусы пользователей обновлены",-1);
+        }
+        static async Task SaveStates()
+        {
+            foreach (var state in UserState.States)
+            {
+                var user = await GetUser(state.Key);
+                user.State = state.Value;
+                await UpdateUser(user);
+            }
+            Log("Данные сохранены.");
+        }
+        static async Task DownloadFiles()
+        {
+            string fileUrl = "https://www.ects.ru/images/280/Image/4_kurs_24-25_novoe.xls";
+            string destinationPath = "C:\\Path\\To\\Save\\file.zip";
+
+            using (HttpClient client = new HttpClient())
+            {
+                try
+                {
+                    Log("Скачивание файла...");
+                    byte[] fileBytes = await client.GetByteArrayAsync(fileUrl);
+
+                    await System.IO.File.WriteAllBytesAsync(destinationPath, fileBytes);
+                    Log($"Файл успешно скачан и сохранён в {destinationPath}");
+                }
+                catch (Exception ex)
+                {
+                    Log($"Ошибка при скачивании файла: {ex.Message}");
+                }
+            }
         }
         static void EnsureDb()
         {
