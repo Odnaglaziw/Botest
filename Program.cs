@@ -9,6 +9,7 @@ using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
 using System.Xml.Linq;
 using System.Text.RegularExpressions;
 using static System.Net.Mime.MediaTypeNames;
+using System.Security.Policy;
 
 namespace Botest
 {
@@ -25,9 +26,9 @@ namespace Botest
                 SaveStates().GetAwaiter().GetResult();
             };
             EnsureDb();
-            AddUser(AdminChatId,"Admin","ygy","Pr-31","main");
+            AddUser(AdminChatId,"Admin","ygy","Pr-31","main").Wait();
             UserState.States[AdminChatId] = "main";
-            GetAllStates();
+            GetAllStates().Wait();
             System.Timers.Timer timer = new System.Timers.Timer();
             timer.Interval = 1;
             timer.Elapsed += Timer_Elapsed;
@@ -37,13 +38,15 @@ namespace Botest
             upd.Interval = 3_600_000;
             upd.Elapsed += Upd_Elapsed;
             upd.Start();
+            DownloadFiles().Wait();
+            XlsManager.GetDataFrom(".\\Downloads\\3.xls", "Пр-31 Пр-32").Wait();
             Console.ReadLine();
         }
 
         private static void Upd_Elapsed(object? sender, ElapsedEventArgs e)
         {
             Log("Данные обновлены");
-            DownloadFiles();
+            DownloadFiles().Wait();
             lastUpdate = DateTime.Now;
         }
 
@@ -88,7 +91,7 @@ namespace Botest
             if (!UserState.States.ContainsKey(chatId))
             {
                 UserState.States[chatId] = "reg:Name";
-                AddUser(chatId, message.Chat.FirstName, message.Chat.LastName, "", "reg:Name");
+                await AddUser(chatId, message.Chat.FirstName!, message.Chat.LastName!, "", "reg:Name");
                 Log("Начал беседу", chatId);
                 await client.SendTextMessageAsync(chatId, "Здравствуйте! Я вас не знаю, как вас зовут?");
                 List<InlineKeyboardButton> btns = [InlineKeyboardButton.WithCallbackData("Данные", $"GetInfo;{chatId}")];
@@ -101,7 +104,7 @@ namespace Botest
                 case "reg:Name":
                     {
                         var user = await GetUser(chatId);
-                        user.Name = message.Text.Trim();
+                        user.Name = message.Text!.Trim();
                         UserState.States[chatId] = "reg:LastName";
                         user.State = UserState.States[chatId];
                         await UpdateUser(user);
@@ -111,7 +114,7 @@ namespace Botest
                 case "reg:LastName":
                     {
                         var user = await GetUser(chatId);
-                        user.LastName = message.Text.Trim();
+                        user.LastName = message.Text!.Trim();
                         UserState.States[chatId] = "reg:Group";
                         user.State = UserState.States[chatId];
                         await UpdateUser(user);
@@ -120,7 +123,7 @@ namespace Botest
                     break;
                 case "reg:Group":
                     {
-                        string[] test = message.Text.Trim().Split(new char[] { '-' });
+                        string[] test = message.Text!.Trim().Split(new char[] { '-' });
                         if (test.Length != 2)
                         {
                             await client.SendTextMessageAsync(chatId, "В формате ХХ-00");
@@ -154,7 +157,7 @@ namespace Botest
             if (!UserState.States.ContainsKey(chatId))
             {
                 UserState.States[chatId] = "reg:Name";
-                AddUser(chatId, message.Chat.FirstName, message.Chat.LastName, "", "reg:Name");
+                await AddUser(chatId, message.Chat.FirstName!, message.Chat.LastName!, "", "reg:Name");
                 Log("Начал беседу", chatId);
                 await client.SendTextMessageAsync(chatId, "Здравствуйте! Я вас не знаю, как вас зовут?");
 
@@ -163,7 +166,7 @@ namespace Botest
                 await client.SendTextMessageAsync(AdminChatId, $"Пользователь {chatId} начал беседу", replyMarkup: ikm);
                 return;
             }
-            switch (message.Text.Substring(1).ToLower())
+            switch (message.Text!.Substring(1).ToLower())
             {
                 case "start":
                     {
@@ -185,8 +188,8 @@ namespace Botest
 
         private static async Task CallBackHandler(ITelegramBotClient client, CallbackQuery callbackQuery)
         {
-            var chatId = callbackQuery.Message.Chat.Id;
-            string[] datas = callbackQuery.Data.Trim().Split(new char[] { ';' });
+            var chatId = callbackQuery.Message!.Chat.Id;
+            string[] datas = callbackQuery.Data!.Trim().Split(new char[] { ';' });
             switch (datas[0])
             {
                 case "GetInfo":
@@ -220,16 +223,22 @@ namespace Botest
                     }break;
                 case "Schedule":
                     {
-
-                    }break;
+                        double min = (DateTime.Now-lastUpdate).TotalMinutes;
+                        await using Stream stream = System.IO.File.OpenRead(".\\Downloads\\Pr-31.png");
+                        var message = await client.SendPhotoAsync(chatId, InputFile.FromStream(stream, "Pr-31.png"),
+                            caption: $"Пока что я могу отправить лишь Пр-31\n" +
+                            $"Данные полученые {min} минут назад");
+                    }
+                    break;
                 case "Bells":
                     {
-
+                        await client.SendPhotoAsync(chatId,InputFile.FromUri(urlBell));
                     }
                     break;
                 case "DaysTo":
                     {
-
+                        int days = (Convert.ToDateTime("31.12.2024")-DateTime.Now).Days;
+                        await client.SendTextMessageAsync(chatId,$"До нового года {days} дней.");
                     }
                     break;
                 case "Profile":
@@ -260,6 +269,7 @@ namespace Botest
 
         private static async Task Error(ITelegramBotClient client, Exception exception, CancellationToken token)
         {
+            Log(exception.Message,Int16.MinValue);
         }
 
         private static void Timer_Elapsed(object? sender, ElapsedEventArgs e)
@@ -268,12 +278,12 @@ namespace Botest
             (sender as System.Timers.Timer).Dispose();
         }
 
-        static void Log(string text,long Id)
+        public static void Log(string text,long Id)
         {
 
             Console.WriteLine($"{DateTime.Now}  |  {Id.ToString().PadRight(11)} | {text}");
         }
-        static void Log(string text)
+        public static void Log(string text)
         {
 
             Console.WriteLine($"{DateTime.Now}  |  {(-1).ToString().PadRight(11)} | {text}");
@@ -341,18 +351,40 @@ namespace Botest
         }
         static async Task DownloadFiles()
         {
-            string fileUrl = "https://www.ects.ru/images/280/Image/4_kurs_24-25_novoe.xls";
-            string destinationPath = "C:\\Path\\To\\Save\\file.zip";
+            string fileUrl_1 = "https://www.ects.ru/images/280/Image/1_kurs_24-25_novoe.xls";
+            string fileUrl_2 = "https://www.ects.ru/images/280/Image/2_kurs_24-25_novoe.xls";
+            string fileUrl_3 = "https://www.ects.ru/images/280/Image/3_kurs_24-25_novoe.xls";
+            string fileUrl_4 = "https://www.ects.ru/images/280/Image/4_kurs_24-25_novoe.xls";
+            string destinationPath_1 = ".\\Downloads\\1.xls";
+            string destinationPath_2 = ".\\Downloads\\2.xls";
+            string destinationPath_3 = ".\\Downloads\\3.xls";
+            string destinationPath_4 = ".\\Downloads\\4.xls";
 
             using (HttpClient client = new HttpClient())
             {
                 try
                 {
-                    Log("Скачивание файла...");
-                    byte[] fileBytes = await client.GetByteArrayAsync(fileUrl);
+                    Log("Скачивание файлов...");
+                    byte[] fileBytes_1 = await client.GetByteArrayAsync(fileUrl_1);
 
-                    await System.IO.File.WriteAllBytesAsync(destinationPath, fileBytes);
-                    Log($"Файл успешно скачан и сохранён в {destinationPath}");
+                    await System.IO.File.WriteAllBytesAsync(destinationPath_1, fileBytes_1);
+                    Log($"Файл успешно скачан и сохранён в {destinationPath_1}");
+                    byte[] fileBytes_2 = await client.GetByteArrayAsync(fileUrl_2);
+
+                    await System.IO.File.WriteAllBytesAsync(destinationPath_2, fileBytes_2);
+                    Log($"Файл успешно скачан и сохранён в {destinationPath_2}");
+                    byte[] fileBytes_3 = await client.GetByteArrayAsync(fileUrl_3);
+
+                    await System.IO.File.WriteAllBytesAsync(destinationPath_3, fileBytes_3);
+                    Log($"Файл успешно скачан и сохранён в {destinationPath_3}");
+                    byte[] fileBytes_4 = await client.GetByteArrayAsync(fileUrl_4);
+
+                    await System.IO.File.WriteAllBytesAsync(destinationPath_4, fileBytes_4);
+                    Log($"Файл успешно скачан и сохранён в {destinationPath_4}");
+
+                    byte[] bells = await client.GetByteArrayAsync(urlBell);
+                    await System.IO.File.WriteAllBytesAsync(".\\Downloads\\Bells.jpg", bells);
+                    Log($"Файл успешно скачан и сохранён в .\\Downloads\\Bells.jpg");
                 }
                 catch (Exception ex)
                 {
