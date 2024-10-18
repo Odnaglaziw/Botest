@@ -4,6 +4,10 @@ using System.Windows;
 using System.Timers;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
+using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
+using System.Xml.Linq;
+using System.Text.RegularExpressions;
 
 namespace Botest
 {
@@ -13,6 +17,8 @@ namespace Botest
         public static void Main(string[] args)
         {
             EnsureDb();
+            AddUser(AdminChatId,"Admin","ygy","Pr-31","main");
+            UserState.States[AdminChatId] = "main";
             GetAllStates();
             System.Timers.Timer timer = new System.Timers.Timer();
             timer.Interval = 1;
@@ -29,15 +35,8 @@ namespace Botest
             bot.StartReceiving(Update,Error);
         }
 
-        private static async Task Update(ITelegramBotClient client, Update update, CancellationToken token)
+        private static async Task Update(ITelegramBotClient client, Telegram.Bot.Types.Update update, CancellationToken token)
         {
-            if (!UserState.States.ContainsKey(update.Message.Chat.Id))
-            {
-                UserState.States[update.Message.Chat.Id] = "reg:Name";
-                AddUser(update.Message.Chat.Id, update.Message.Chat.FirstName, update.Message.Chat.FirstName, "", "reg:Name");
-                Log("Начал беседу", update.Message.Chat.Id);
-                await client.SendTextMessageAsync(update.Message.Chat.Id, "Здравствуйте! Я вас не знаю, как вас зовут?");
-            }
             switch (update.Type)
             {
                 case UpdateType.CallbackQuery:
@@ -66,14 +65,124 @@ namespace Botest
 
         private static async Task MessageHandler(ITelegramBotClient client, Message message)
         {
+            var chatId = message.Chat.Id;
+            if (!UserState.States.ContainsKey(chatId))
+            {
+                UserState.States[chatId] = "reg:Name";
+                AddUser(chatId, message.Chat.FirstName, message.Chat.LastName, "", "reg:Name");
+                Log("Начал беседу", chatId);
+                await client.SendTextMessageAsync(chatId, "Здравствуйте! Я вас не знаю, как вас зовут?");
+                List<InlineKeyboardButton> btns = [InlineKeyboardButton.WithCallbackData("Данные", $"GetInfo;{chatId}")];
+                InlineKeyboardMarkup ikm = new(btns);
+                await client.SendTextMessageAsync(AdminChatId, $"Пользователь {chatId} начал беседу", replyMarkup: ikm);
+                return;
+            }
+            switch (UserState.States[chatId])
+            {
+                case "reg:Name":
+                    {
+                        var user = await GetUser(chatId);
+                        user.Name = message.Text.Trim();
+                        UserState.States[chatId] = "reg:LastName";
+                        await UpdateUser(user);
+                        await client.SendTextMessageAsync(chatId,$"Записал ваше имя как {message.Text}\nКакая у вас фамииля?");
+                    }
+                    break;
+                case "reg:LastName":
+                    {
+                        var user = await GetUser(chatId);
+                        user.LastName = message.Text.Trim();
+                        UserState.States[chatId] = "reg:Group";
+                        await UpdateUser(user);
+                        await client.SendTextMessageAsync(chatId, $"Записал вашу фамилию как {message.Text}\nВ какой вы группе?\n(В формате ХХ-00)");
+                    }
+                    break;
+                case "reg:Group":
+                    {
+                        string[] test = message.Text.Trim().Split(new char[] { '-' });
+                        if (test.Length != 2)
+                        {
+                            await client.SendTextMessageAsync(chatId, "В формате ХХ-00");
+                            break;
+                        }
+                        if (!Regex.IsMatch(test[0], @"^[a-zA-Zа-яА-Я]+$") && Regex.IsMatch(test[1], @"^[a-zA-Zа-яА-Я]+$"))
+                        {
+                            await client.SendTextMessageAsync(chatId, "В формате ХХ-00");
+                            break;
+                        }
+                        var user = await GetUser(chatId);
+                        user.Group = message.Text.Trim();
+                        UserState.States[chatId] = "main";
+                        await UpdateUser(user);
+                        await client.SendTextMessageAsync(chatId, $"Записал вашу группу как {message.Text}\nПрофиль заполнен, рад был познакомиться!");
+                        List<InlineKeyboardButton> btns = [InlineKeyboardButton.WithCallbackData("Данные", $"GetInfo;{chatId}")];
+                        InlineKeyboardMarkup ikm = new(btns);
+                        await client.SendTextMessageAsync(AdminChatId, $"Пользователь {chatId} изменил данные", replyMarkup: ikm);
+                        await CallBackHandler(client, new CallbackQuery { Data = "Menu", Message = message });
+                    }
+                    break;
+
+                default: { }break;
+            }
         }
 
         private static async Task CommandHandler(ITelegramBotClient client, Message message)
         {
+            var chatId = message.Chat.Id;
+            if (!UserState.States.ContainsKey(chatId))
+            {
+                UserState.States[chatId] = "reg:Name";
+                AddUser(chatId, message.Chat.FirstName, message.Chat.LastName, "", "reg:Name");
+                Log("Начал беседу", chatId);
+                await client.SendTextMessageAsync(chatId, "Здравствуйте! Я вас не знаю, как вас зовут?");
+
+                List<InlineKeyboardButton> btns = [InlineKeyboardButton.WithCallbackData("Данные", $"GetInfo;{chatId}")];
+                InlineKeyboardMarkup ikm = new(btns);
+                await client.SendTextMessageAsync(AdminChatId, $"Пользователь {chatId} начал беседу", replyMarkup: ikm);
+                return;
+            }
+            switch (message.Text.Substring(1).ToLower())
+            {
+                case "start":
+                    {
+                        var user = await GetUser(chatId);
+                        await client.SendTextMessageAsync(chatId, $"Мы уже знакомы, {user.Name}! Для дальнейших действий возпользуйтесь /menu");
+                    }break;
+                case "profile":
+                    {
+
+                    }
+                    break;
+                default: { }break;
+            }
         }
 
         private static async Task CallBackHandler(ITelegramBotClient client, CallbackQuery callbackQuery)
         {
+            var chatId = callbackQuery.Message.Chat.Id;
+            string[] datas = callbackQuery.Data.Trim().Split(new char[] { ';' });
+            switch (datas[0])
+            {
+                case "GetInfo":
+                    {
+                        string text = "";
+                        var optionsBuilder = new DbContextOptionsBuilder<UserDbContext>();
+                        optionsBuilder.UseNpgsql("Host=odnaglaziw.online;Port=5432;user id = postgres;Password=DsPs4N8gt3;");
+                        using (var context = new UserDbContext(optionsBuilder.Options))
+                        {
+                            var user = await context.GetUserByIdAsync(Convert.ToInt64(datas[1]));
+                            text = $"Имя пользователя: {user.Name}\n" +
+                                $"Фамилия пользователя: {user.LastName}\n" +
+                                $"Группа пользователя: {user.Group}\n" +
+                                $"id пользователя: {user.Id}";
+                        }
+                        Log($"Запорсил данные об {Convert.ToInt64(datas[1])}",AdminChatId);
+                        await client.SendTextMessageAsync(AdminChatId,text);
+                    }
+                    break;
+
+                default: { }break;
+            }
         }
 
         private static async Task Error(ITelegramBotClient client, Exception exception, CancellationToken token)
@@ -97,7 +206,7 @@ namespace Botest
             Console.WriteLine($"{DateTime.Now}  |  {(-1).ToString().PadRight(11)} | {text}");
         }
 
-        static async void AddUser(long id, string name, string lastname, string group, string state)
+        static async Task AddUser(long id, string name, string lastname, string group, string state)
         {
             var optionsBuilder = new DbContextOptionsBuilder<UserDbContext>();
             optionsBuilder.UseNpgsql("Host=odnaglaziw.online;Port=5432;user id = postgres;Password=DsPs4N8gt3;");
@@ -114,7 +223,26 @@ namespace Botest
             }
             Log("Пользователь внесён в бд",id);
         }
-        static async void GetAllStates()
+        static async Task UpdateUser(UserDbContext.User user)
+        {
+            var optionsBuilder = new DbContextOptionsBuilder<UserDbContext>();
+            optionsBuilder.UseNpgsql("Host=odnaglaziw.online;Port=5432;user id = postgres;Password=DsPs4N8gt3;");
+            using (var context = new UserDbContext(optionsBuilder.Options))
+            {
+                await context.UpdateUserAsync(user);
+            }
+            Log("Пользователь обновил данные профиля", user.Id);
+        }
+        static async Task<UserDbContext.User> GetUser(long id)
+        {
+            var optionsBuilder = new DbContextOptionsBuilder<UserDbContext>();
+            optionsBuilder.UseNpgsql("Host=odnaglaziw.online;Port=5432;user id = postgres;Password=DsPs4N8gt3;");
+            using (var context = new UserDbContext(optionsBuilder.Options))
+            {
+                return await context.GetUserByIdAsync(id);
+            }
+        }
+        static async Task GetAllStates()
         {
             var optionsBuilder = new DbContextOptionsBuilder<UserDbContext>();
             optionsBuilder.UseNpgsql("Host=odnaglaziw.online;Port=5432;user id = postgres;Password=DsPs4N8gt3;");

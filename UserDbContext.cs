@@ -43,9 +43,9 @@ namespace Botest
             }
         }
 
-        public async Task<User> GetUserByIdAsync(long id)
+        public async Task<User?> GetUserByIdAsync(long id)
         {
-            return await Users.FindAsync(id);
+            return await Users.FirstOrDefaultAsync(c => c.Id == id);
         }
 
         public async Task<List<User>> GetAllUsersAsync()
