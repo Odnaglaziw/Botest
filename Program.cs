@@ -36,6 +36,7 @@ namespace Botest
             System.Timers.Timer upd = new System.Timers.Timer();
             upd.Interval = 3_600_000;
             upd.Elapsed += Upd_Elapsed;
+            upd.Start();
             Console.ReadLine();
         }
 
